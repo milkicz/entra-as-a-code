@@ -13,6 +13,10 @@ resource "msgraph_resource" "application" {
   }
 }
 
+module "entra_application_management_policy" {
+  source = "./_modules/entra_application_management_policy"
+}
+
 output "app_id" {
   value = msgraph_resource.application.output.app_id
 }
