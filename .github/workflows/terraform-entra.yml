@@ -1,0 +1,199 @@
+name: Terraform Entra Deployment
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+env:
+  TERRAFORM_VERSION: "1.6.0"
+  ARM_USE_OIDC: "true"
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  detect-changes:
+    name: Detect Changed Directories
+    runs-on: ubuntu-latest
+    outputs:
+      directories: ${{ steps.changes.outputs.directories }}
+      has_changes: ${{ steps.changes.outputs.has_changes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed Terraform directories
+        id: changes
+        run: |
+          # Define root modules
+          MODULES=("app_registrations" "groups" "conditional_access" "tenant_configuration" "application_management_policy")
+
+          # Determine diff base
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
+
+          # Get changed files
+          CHANGED_FILES=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          # Check if shared directories changed (triggers all modules)
+          SHARED_CHANGED=false
+          if echo "$CHANGED_FILES" | grep -qE "^(_common|_modules)/"; then
+            SHARED_CHANGED=true
+            echo "Shared modules changed - all directories will be deployed"
+          fi
+
+          # Build list of changed directories
+          CHANGED_DIRS=()
+          for MODULE in "${MODULES[@]}"; do
+            if [ "$SHARED_CHANGED" = true ]; then
+              CHANGED_DIRS+=("$MODULE")
+            elif echo "$CHANGED_FILES" | grep -qE "^${MODULE}/"; then
+              CHANGED_DIRS+=("$MODULE")
+            fi
+          done
+
+          # Output as JSON matrix
+          if [ ${#CHANGED_DIRS[@]} -eq 0 ]; then
+            echo "directories=[]" >> "$GITHUB_OUTPUT"
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No Terraform changes detected"
+          else
+            JSON=$(printf '%s\n' "${CHANGED_DIRS[@]}" | jq -R -s -c 'split("\n") | map(select(. != ""))')
+            echo "directories=${JSON}" >> "$GITHUB_OUTPUT"
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "Changed directories: ${JSON}"
+          fi
+
+  terraform-plan:
+    name: Plan - ${{ matrix.directory }}
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: ${{ fromJson(needs.detect-changes.outputs.directories) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        working-directory: ${{ matrix.directory }}
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.BACKEND_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.BACKEND_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.BACKEND_CONTAINER }}" \
+            -backend-config="key=${{ matrix.directory }}.tfstate"
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ matrix.directory }}
+        run: |
+          terraform plan -var-file=env/dev.tfvars -no-color -out=tfplan 2>&1 | tee plan_output.txt
+          echo "exitcode=$?" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Post Plan to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const planOutput = fs.readFileSync('${{ matrix.directory }}/plan_output.txt', 'utf8');
+            const truncated = planOutput.length > 60000
+              ? planOutput.substring(0, 60000) + '\n... (truncated)'
+              : planOutput;
+
+            const body = `### Terraform Plan: \`${{ matrix.directory }}\`
+
+            <details>
+            <summary>Show Plan Output</summary>
+
+            \`\`\`terraform
+            ${truncated}
+            \`\`\`
+
+            </details>`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+  terraform-apply:
+    name: Apply - ${{ matrix.directory }}
+    needs: [detect-changes, terraform-plan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.detect-changes.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: terraform-apply-${{ matrix.directory }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        directory: ${{ fromJson(needs.detect-changes.outputs.directories) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        working-directory: ${{ matrix.directory }}
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.BACKEND_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.BACKEND_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.BACKEND_CONTAINER }}" \
+            -backend-config="key=${{ matrix.directory }}.tfstate"
+
+      - name: Terraform Apply
+        working-directory: ${{ matrix.directory }}
+        run: terraform apply -var-file=env/dev.tfvars -auto-approve
