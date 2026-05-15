@@ -1,7 +1,0 @@
-project_name            = "entra-training"
-environment             = "dev"
-create_demo_group       = true
-create_demo_application = true
-application_redirect_uris = [
-  "http://localhost:3000/auth/callback"
-]

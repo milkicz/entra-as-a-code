@@ -1,12 +1,3 @@
-terraform {
-  required_providers {
-    msgraph = {
-      source = "microsoft/msgraph"
-    }
-  }
-}
-
-
 resource "msgraph_update_resource" "application_management_policy" {
   url = "policies/defaultAppManagementPolicy"
 
@@ -32,4 +23,3 @@ resource "msgraph_update_resource" "application_management_policy" {
     },
   }
 }
-

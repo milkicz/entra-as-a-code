@@ -1,73 +1,93 @@
 # Entra as Code (Terraform)
 
-Terraform project for managing Microsoft Entra ID resources as code using the Microsoft Graph provider.
+Manage Microsoft Entra ID configuration as code using Terraform and the Microsoft Graph provider. Each Entra domain is a **separate Terraform root configuration** that can be independently planned and deployed.
 
-## What this creates
+## Project Structure
 
-- **Organizational branding** - Custom sign-in page colors and text
-- **Security group** - `<project>-<env>-platform-admins`
-- **App registration** - `<project>-<env>-app` with optional redirect URIs
-- **Service principal** - For the app registration
+```
+entra-as-a-code/
+├── _common/                             # Shared module for provider/auth variables
+│   ├── variables.tf
+│   └── outputs.tf
+├── _modules/                            # Reusable Terraform sub-modules
+│   ├── entra_application_management_policy/
+│   └── conditional_access_for_workload_identities/
+├── app_registrations/                   # App registrations & service principals
+├── groups/                              # Entra security groups & Teams
+├── conditional_access/                  # Conditional Access policies (placeholder)
+├── tenant_configuration/                # Org branding & tenant settings
+├── application_management_policy/       # App management policies
+├── assets/
+└── README.md
+```
 
-Conditional resources are controlled via variables in `env/dev.tfvars`.
+## Domain Descriptions
+
+| Directory | Purpose |
+|-----------|---------|
+| `app_registrations/` | Manages Entra app registrations and service principals |
+| `groups/` | Manages Entra security groups, M365 groups, and Teams |
+| `conditional_access/` | Manages Conditional Access policies (placeholder for future use) |
+| `tenant_configuration/` | Manages organization branding and tenant-level settings |
+| `application_management_policy/` | Manages default app management policies (credential restrictions) |
+| `_common/` | Shared module providing common authentication variables |
+| `_modules/` | Reusable Terraform sub-modules |
+
+Each domain directory contains its own `main.tf`, `variables.tf`, `outputs.tf`, `providers.tf`, `versions.tf`, and an `env/` folder with environment-specific variable files.
 
 ## Prerequisites
 
 - Terraform `>= 1.6.0`
 - Azure CLI logged into the target tenant with appropriate permissions
 
-Install Terraform on Windows (if needed):
-
 ```powershell
 winget install Hashicorp.Terraform
+az login --tenant <your-tenant-id>
 ```
 
-Login to your specific Entra tenant:
+## Usage
 
-```powershell
-az login --tenant 0130e710-4381-4af2-ae7e-a81cf4c2ae6d
-az account show
+Deploy a specific domain using `-chdir`:
+
+```bash
+# Initialize
+terraform -chdir=groups init
+
+# Plan
+terraform -chdir=groups plan -var-file=env/dev.tfvars
+
+# Apply
+terraform -chdir=groups apply -var-file=env/dev.tfvars
 ```
 
-## Quick start
+Other common operations:
 
-```powershell
-terraform init
-terraform validate
-terraform plan -var-file="env/dev.tfvars"
-terraform apply -auto-approve -var-file="env/dev.tfvars"
-```
-
-## Configuration
-
-Edit [env/dev.tfvars](env/dev.tfvars) to customize:
-- Tenant ID
-- Project and environment names
-- Branding colors and text (background color, sign-in text, username hint)
-- Optional group and application creation flags
-
-## Common operations
-
-```powershell
-# Format code
+```bash
+# Format all code
 terraform fmt -recursive
 
-# Preview changes
-terraform plan -var-file="env/dev.tfvars"
-
-# Destroy all resources
-terraform destroy -auto-approve -var-file="env/dev.tfvars"
+# Destroy resources for a domain
+terraform -chdir=groups destroy -var-file=env/dev.tfvars
 ```
 
-## Microsoft Graph Provider
+## Adding a New Environment
 
-This project uses the `microsoft/msgraph` provider which works directly with Microsoft Graph API endpoints. Resources are defined using `msgraph_resource` with:
-- `url` - Graph API endpoint (e.g., `/groups`, `/applications`)
-- `body` - JSON request body
-- `response_export_values` - Fields to extract from responses
+Create a new `.tfvars` file in each domain's `env/` directory. For example, to add a `prod` environment:
+
+```
+groups/env/prod.tfvars
+app_registrations/env/prod.tfvars
+tenant_configuration/env/prod.tfvars
+```
+
+Then deploy with:
+
+```bash
+terraform -chdir=groups plan -var-file=env/prod.tfvars
+```
 
 ## Notes
 
-- State is local by default. Add remote backend (Azure Storage) for team usage.
-- After `apply`, review objects in Microsoft Entra admin center: https://entra.microsoft.com/
-- Branding changes appear immediately on the tenant sign-in page.
+- State is local by default. Add a remote backend (Azure Storage) for team usage.
+- After `apply`, review objects in [Microsoft Entra admin center](https://entra.microsoft.com/).
+- This project uses the `microsoft/msgraph` provider which works directly with Microsoft Graph API endpoints.
