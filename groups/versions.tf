@@ -4,4 +4,6 @@ terraform {
       source = "Microsoft/msgraph"
     }
   }
+
+  backend "azurerm" {}
 }
