@@ -88,7 +88,7 @@ terraform -chdir=groups plan -var-file=env/prod.tfvars
 
 ## CI/CD Pipeline
 
-This project uses GitHub Actions to automatically deploy Terraform changes. The workflow detects which directories have changed and only runs `plan`/`apply` on affected modules.
+This project uses GitHub Actions to deploy Terraform changes automatically on repository events and manually through `workflow_dispatch`. Automatic runs detect which directories changed and only run `plan`/`apply` on affected modules.
 
 ### Workflow Behavior
 
@@ -96,8 +96,22 @@ This project uses GitHub Actions to automatically deploy Terraform changes. The 
 |-------|--------|
 | Pull Request to `main` | `terraform plan` on changed directories, posts output as PR comment |
 | Push/Merge to `main` | `terraform apply` on changed directories |
+| Manual `workflow_dispatch` | `terraform plan` or `terraform apply` for a selected directory, or all directories |
 
 **Change detection**: If files in `_common/` or `_modules/` change, all root modules are deployed. Otherwise, only directories with direct changes are affected.
+
+### Manual execution
+
+You can run the workflow manually from the **Actions** tab using the `Terraform Entra Deployment` workflow.
+
+- **operation**
+  - `plan` runs Terraform plan only
+  - `apply` runs plan first and then apply
+- **directory**
+  - choose one Terraform root directory
+  - choose `all` to run every root directory
+
+Manual `apply` runs keep the existing `production` environment protection and are only allowed from the `main` branch.
 
 ### Required GitHub Setup
 
