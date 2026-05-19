@@ -119,23 +119,27 @@ Manual `apply` runs keep the existing `production` environment protection and ar
 2. **Configure Federated Credentials** for GitHub Actions OIDC:
    - Issuer: `https://token.actions.githubusercontent.com`
    - Subject: `repo:<org>/<repo>:ref:refs/heads/main` (and for PRs)
-3. **Create Azure Storage** for Terraform state (resource group, storage account, blob container)
-4. **Add GitHub Secrets**:
+3. **Create Azure Storage** for Terraform state (storage account, blob container)
+4. **Grant backend state access** to the GitHub Actions principal:
+   - `Storage Blob Data Contributor` on the Terraform state container or storage account
+   - No storage account access keys are required
+5. **Add GitHub Secrets**:
 
 | Secret | Description |
 |--------|-------------|
 | `AZURE_CLIENT_ID` | Service principal application (client) ID |
 | `AZURE_TENANT_ID` | Entra tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Azure subscription for backend storage |
-| `BACKEND_RESOURCE_GROUP` | Resource group containing the storage account |
 | `BACKEND_STORAGE_ACCOUNT` | Storage account name for Terraform state |
 | `BACKEND_CONTAINER` | Blob container name for Terraform state files |
 
-5. **Create a GitHub Environment** named `production` (optional, for apply approval gates)
+6. **Create a GitHub Environment** named `production` (optional, for apply approval gates)
 
 ### Remote Backend
 
-Each root module uses Azure Storage (`azurerm` backend) with partial configuration. State files are stored as `<directory-name>.tfstate` in the configured container.
+Each root module uses Azure Storage (`azurerm` backend) with partial configuration. In GitHub Actions, `terraform init` authenticates to the backend with Microsoft Entra ID over OIDC (`ARM_USE_OIDC=true` and `ARM_USE_AZUREAD=true`) and stores state as `<directory-name>.tfstate` in the configured container.
+
+The GitHub Actions service principal must have `Storage Blob Data Contributor` on the backend container or storage account. This repository's workflow does not use storage account access keys for Terraform state access.
 
 For local development, you can still init with a local backend override:
 
